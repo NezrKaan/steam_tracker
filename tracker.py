@@ -1,309 +1,397 @@
 #!/usr/bin/env python3
 """
-Steam Status Monitor - full profile-change tracking
-Made by NezrKaan
+Steam Status Monitor - Single user tracking
+Made by NezrKaan - Simplified Version
 
-Behavior:
-- Prints/logs when user's status, current game, or profile fields change.
-- Detects: nickname, real name, country, profile URL, avatar (profile pic) changes.
-- Shows when the user starts/stops playing a specific game, with times and duration.
-- Typed keys do NOT echo and do not trigger anything.
-- Exit with Ctrl+C.
-- Logs events to 'steam_status_log.txt'.
+Features:
+- User monitoring with comprehensive tracking
+- Automatic safe settings (20 second intervals)
+- Clean, real-time logging
+- Profile change detection
+- Game activity tracking with duration
+- Optional Discord notifications
 """
 
 import requests
 import time
 import sys
-import termios
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
+from dataclasses import dataclass
+from typing import Dict, Optional
+from pathlib import Path
 
 # -------------------------
-# Styling (ANSI sequences)
+# Configuration
 # -------------------------
-RESET = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
+@dataclass
+class Config:
+    api_key: str
+    user_identifier: str
+    check_interval: int = 20  # Safe default
+    log_file: str = "steam_monitor.log"
+    json_log: str = "steam_events.json"
+    discord_webhook: Optional[str] = None
 
-RED = "\033[91m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-MAGENTA = "\033[95m"
-CYAN = "\033[96m"
-WHITE = "\033[97m"
-
-# Decorative box characters
-HORIZ = "━"
-VERT = "┃"
-TL = "┏"
-TR = "┓"
-BL = "┗"
-BR = "┛"
-
-# Log file
-LOG_FILE = "steam_status_log.txt"
+@dataclass
+class UserProfile:
+    steamid: str
+    personaname: str
+    realname: Optional[str] = None
+    country: Optional[str] = None
+    avatar: Optional[str] = None
+    profile_url: Optional[str] = None
+    persona_state: int = 0
+    game_name: Optional[str] = None
+    game_start_time: Optional[datetime] = None
 
 # -------------------------
-# Helpers
+# Styling
 # -------------------------
-def now_ts():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-def format_time(dt):
-    return dt.strftime("%H:%M:%S")
-
-def format_duration(start_dt, end_dt):
-    delta = end_dt - start_dt
-    secs = int(delta.total_seconds())
-    hrs, rem = divmod(secs, 3600)
-    mins, sec = divmod(rem, 60)
-    parts = []
-    if hrs:
-        parts.append(f"{hrs}h")
-    if mins:
-        parts.append(f"{mins}m")
-    if sec and not parts:
-        parts.append(f"{sec}s")
-    return " ".join(parts) if parts else "0s"
-
-def log_plain(line):
-    with open(LOG_FILE, "a") as f:
-        f.write(f"{line}\n")
-
-def pretty_log(message, color=""):
-    ts = now_ts()
-    plain = f"{ts} - {message}"
-    colored = f"{color}{ts} - {message}{RESET}" if color else plain
-    print(colored, flush=True)
-    log_plain(plain)
+class Style:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    MAGENTA = "\033[95m"
+    CYAN = "\033[96m"
+    WHITE = "\033[97m"
+    GRAY = "\033[90m"
+    
+    STATUS_COLORS = {0: RED, 1: GREEN, 2: YELLOW, 3: CYAN, 4: MAGENTA, 5: BLUE, 6: BLUE}
+    STATUS_TEXT = {0: "Offline", 1: "Online", 2: "Busy", 3: "Away", 4: "Snooze", 5: "Looking to trade", 6: "Looking to play"}
 
 # -------------------------
-# Steam API helpers
+# Steam API Client
 # -------------------------
-def resolve_vanity(api_key, vanity):
-    url = "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/"
-    try:
-        r = requests.get(url, params={"key": api_key, "vanityurl": vanity}, timeout=8)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("response", {}).get("success") == 1:
-            return data["response"]["steamid"]
-    except Exception:
-        return None
-    return None
-
-def fetch_player(api_key, steamid64):
-    """
-    Returns a dict of player fields or (None) if not found,
-    or ("ERROR", error_message) tuple on API/network error.
-    """
-    url = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
-    try:
-        r = requests.get(url, params={"key": api_key, "steamids": steamid64}, timeout=8)
-        r.raise_for_status()
-        data = r.json()
-        players = data.get("response", {}).get("players", [])
-        if not players:
+class SteamAPIClient:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.session = requests.Session()
+        self.last_request_time = 0
+        self.min_request_interval = 1.0
+        
+    def _make_request(self, url: str, params: Dict) -> Optional[Dict]:
+        # Simple rate limiting
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        if time_since_last < self.min_request_interval:
+            time.sleep(self.min_request_interval - time_since_last)
+        
+        try:
+            self.last_request_time = time.time()
+            response = self.session.get(url, params=params, timeout=10)
+            
+            if response.status_code == 429:
+                print(f"{Style.YELLOW}[WARNING] Rate limited! Waiting 60s...{Style.RESET}")
+                time.sleep(60)
+                return None
+                
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            print(f"{Style.RED}[ERROR] API request failed: {e}{Style.RESET}")
             return None
-        return players[0]
-    except Exception as e:
-        return ("ERROR", str(e))
+    
+    def resolve_vanity_url(self, vanity: str) -> Optional[str]:
+        url = "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/"
+        params = {"key": self.api_key, "vanityurl": vanity}
+        
+        data = self._make_request(url, params)
+        if data and data.get("response", {}).get("success") == 1:
+            return data["response"]["steamid"]
+        return None
+    
+    def get_player_summary(self, steamid: str) -> Optional[Dict]:
+        url = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
+        params = {"key": self.api_key, "steamids": steamid}
+        
+        data = self._make_request(url, params)
+        if data:
+            players = data.get("response", {}).get("players", [])
+            return players[0] if players else None
+        return None
 
 # -------------------------
-# Map persona state -> (readable text, color)
+# Logger
 # -------------------------
-STATE_META = {
-    0: ("Offline", RED),
-    1: ("Online", GREEN),
-    2: ("Busy", YELLOW),
-    3: ("Away", CYAN),
-    4: ("Snooze", MAGENTA),
-    5: ("Looking to trade", BLUE),
-    6: ("Looking to play", BLUE),
-}
+class Logger:
+    def __init__(self, config: Config):
+        self.config = config
+        Path(self.config.log_file).touch(exist_ok=True)
+        
+    def log(self, message: str, color: str = Style.WHITE):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        # Console output
+        print(f"{Style.GRAY}[{timestamp}]{Style.RESET} {color}{message}{Style.RESET}")
+        
+        # File output
+        file_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(self.config.log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{file_timestamp}] {message}\n")
+        
+        # JSON output
+        self._write_json({
+            "timestamp": datetime.now().isoformat(),
+            "message": message
+        })
+    
+    def _write_json(self, event: Dict):
+        events = []
+        if Path(self.config.json_log).exists():
+            try:
+                with open(self.config.json_log, "r", encoding="utf-8") as f:
+                    events = json.load(f)
+            except:
+                events = []
+        
+        events.append(event)
+        
+        # Keep last 500 events
+        if len(events) > 500:
+            events = events[-500:]
+        
+        with open(self.config.json_log, "w", encoding="utf-8") as f:
+            json.dump(events, f, indent=2)
 
 # -------------------------
-# Terminal control
+# Steam Monitor
 # -------------------------
-def set_no_echo(fd):
-    old = termios.tcgetattr(fd)
-    new = termios.tcgetattr(fd)
-    new[3] = new[3] & ~(termios.ECHO | termios.ICANON)  # disable ECHO and canonical mode
-    termios.tcsetattr(fd, termios.TCSADRAIN, new)
-    return old
-
-def restore_terminal(fd, old_settings):
-    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+class SteamMonitor:
+    def __init__(self, config: Config):
+        self.config = config
+        self.api_client = SteamAPIClient(config.api_key)
+        self.logger = Logger(config)
+        self.profile: Optional[UserProfile] = None
+        self.running = False
+        
+    def setup_user(self) -> bool:
+        """Setup the user to monitor"""
+        print(f"Setting up user: {self.config.user_identifier}...")
+        
+        # Resolve user ID
+        if not self.config.user_identifier.isdigit():
+            print(f"  Resolving custom URL...")
+            steamid = self.api_client.resolve_vanity_url(self.config.user_identifier)
+            if not steamid:
+                print(f"{Style.RED}Could not resolve custom URL: {self.config.user_identifier}{Style.RESET}")
+                return False
+        else:
+            steamid = self.config.user_identifier
+        
+        # Get initial profile
+        print(f"  Fetching profile data...")
+        player_data = self.api_client.get_player_summary(steamid)
+        if not player_data:
+            print(f"{Style.RED}Could not fetch profile for: {steamid}{Style.RESET}")
+            return False
+        
+        # Create profile
+        self.profile = UserProfile(
+            steamid=steamid,
+            personaname=player_data.get('personaname', 'Unknown'),
+            realname=player_data.get('realname'),
+            country=player_data.get('loccountrycode'),
+            avatar=player_data.get('avatarfull'),
+            profile_url=player_data.get('profileurl'),
+            persona_state=player_data.get('personastate', 0),
+            game_name=player_data.get('gameextrainfo')
+        )
+        
+        if self.profile.game_name:
+            self.profile.game_start_time = datetime.now()
+        
+        # Show initial status
+        status_text = Style.STATUS_TEXT.get(self.profile.persona_state, 'Unknown')
+        status_color = Style.STATUS_COLORS.get(self.profile.persona_state, Style.WHITE)
+        game_text = f" | Playing: {self.profile.game_name}" if self.profile.game_name else ""
+        
+        print(f"{Style.GREEN}Successfully set up monitoring for:{Style.RESET}")
+        print(f"  Name: {Style.BOLD}{self.profile.personaname}{Style.RESET}")
+        print(f"  Status: {status_color}{status_text}{Style.RESET}{game_text}")
+        print(f"  SteamID: {steamid}")
+        
+        return True
+    
+    def start_monitoring(self):
+        """Start the monitoring loop"""
+        if not self.profile:
+            print(f"{Style.RED}No user profile set up!{Style.RESET}")
+            return
+        
+        self.running = True
+        
+        print(f"\n{Style.BOLD}{Style.GREEN}Steam Monitor Started{Style.RESET}")
+        print(f"Monitoring: {Style.CYAN}{self.profile.personaname}{Style.RESET}")
+        print(f"Check interval: {self.config.check_interval} seconds")
+        print(f"Log file: {Style.DIM}{self.config.log_file}{Style.RESET}")
+        print(f"Press {Style.BOLD}Ctrl+C{Style.RESET} to stop")
+        print(f"\n{Style.DIM}--- Live Updates ---{Style.RESET}")
+        
+        self.logger.log(f"Monitor started for {self.profile.personaname}")
+        
+        try:
+            while self.running:
+                self._check_for_changes()
+                time.sleep(self.config.check_interval)
+        except KeyboardInterrupt:
+            self.stop_monitoring()
+    
+    def stop_monitoring(self):
+        """Stop monitoring"""
+        self.running = False
+        self.logger.log("Monitor stopped")
+        print(f"\n{Style.CYAN}Monitor stopped. Check {self.config.log_file} for full log.{Style.RESET}")
+    
+    def _check_for_changes(self):
+        """Check for any changes in the user's profile/status"""
+        current_data = self.api_client.get_player_summary(self.profile.steamid)
+        if not current_data:
+            return
+        
+        current_time = datetime.now()
+        
+        # Check status changes
+        new_status = current_data.get('personastate', 0)
+        if new_status != self.profile.persona_state:
+            old_status = Style.STATUS_TEXT.get(self.profile.persona_state, 'Unknown')
+            new_status_text = Style.STATUS_TEXT.get(new_status, 'Unknown')
+            status_color = Style.STATUS_COLORS.get(new_status, Style.WHITE)
+            
+            message = f"{self.profile.personaname} is now {new_status_text} (was {old_status})"
+            self.logger.log(message, status_color)
+            
+            self.profile.persona_state = new_status
+        
+        # Check game changes
+        new_game = current_data.get('gameextrainfo')
+        if new_game != self.profile.game_name:
+            if self.profile.game_name and not new_game:
+                # Game stopped
+                duration = "Unknown"
+                if self.profile.game_start_time:
+                    delta = current_time - self.profile.game_start_time
+                    duration = self._format_duration(delta)
+                
+                message = f"{self.profile.personaname} stopped playing '{self.profile.game_name}' (played for {duration})"
+                self.logger.log(message, Style.YELLOW)
+                
+            elif new_game:
+                # Game started
+                message = f"{self.profile.personaname} started playing '{new_game}'"
+                self.logger.log(message, Style.GREEN)
+                self.profile.game_start_time = current_time
+            
+            self.profile.game_name = new_game
+        
+        # Check profile changes
+        self._check_profile_changes(current_data, current_time)
+    
+    def _check_profile_changes(self, current_data: Dict, timestamp: datetime):
+        """Check for profile field changes"""
+        changes = [
+            ('personaname', 'nickname', self.profile.personaname),
+            ('realname', 'real name', self.profile.realname),
+            ('loccountrycode', 'country', self.profile.country),
+            ('profileurl', 'profile URL', self.profile.profile_url),
+            ('avatarfull', 'avatar', self.profile.avatar)
+        ]
+        
+        for api_field, display_name, old_value in changes:
+            new_value = current_data.get(api_field)
+            
+            # Normalize empty values
+            old_norm = old_value if old_value not in ("", None) else None
+            new_norm = new_value if new_value not in ("", None) else None
+            
+            if old_norm != new_norm:
+                message = f"{self.profile.personaname} changed {display_name}: '{old_norm}' -> '{new_norm}'"
+                self.logger.log(message, Style.MAGENTA)
+                
+                # Update stored value
+                if api_field == 'personaname':
+                    self.profile.personaname = new_norm
+                elif api_field == 'realname':
+                    self.profile.realname = new_norm
+                elif api_field == 'loccountrycode':
+                    self.profile.country = new_norm
+                elif api_field == 'profileurl':
+                    self.profile.profile_url = new_norm
+                elif api_field == 'avatarfull':
+                    self.profile.avatar = new_norm
+    
+    def _format_duration(self, delta: timedelta) -> str:
+        """Format duration in readable format"""
+        total_seconds = int(delta.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        parts = []
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        if seconds and not parts:
+            parts.append(f"{seconds}s")
+        
+        return " ".join(parts) if parts else "0s"
 
 # -------------------------
-# Main program
+# Main Application
 # -------------------------
-def banner():
-    title = "STEAM STATUS MONITOR"
-    subtitle = "Made by NezrKaan"
-    width = max(len(title), len(subtitle)) + 8
-    print(f"{TL}{HORIZ * width}{TR}")
-    print(f"{VERT}  {BOLD}{CYAN}{title.center(width-4)}{RESET}  {VERT}")
-    print(f"{VERT}  {DIM}{WHITE}{subtitle.center(width-4)}{RESET}  {VERT}")
-    print(f"{BL}{HORIZ * width}{BR}\n")
-    print(f"{DIM}Notes:{RESET} - Tracks status, game, and profile field changes (nickname, avatar, country, profile URL). Press Ctrl+C to quit. Logs -> {LOG_FILE}\n")
-
-def compare_and_log_profile_changes(prev, curr):
-    """
-    prev and curr are dicts (or None). Check fields:
-      - personaname (nickname)
-      - realname
-      - loccountrycode
-      - profileurl
-      - avatarfull
-    Log descriptive messages for changes.
-    Returns updated prev snapshot (dict).
-    """
-    fields = [
-        ("personaname", "Nickname", YELLOW),
-        ("realname", "Real name", YELLOW),
-        ("loccountrycode", "Country", CYAN),
-        ("profileurl", "Profile URL", BLUE),
-        ("avatarfull", "Profile picture", MAGENTA),
-    ]
-
-    if prev is None:
-        # initialize snapshot with available values (no logs)
-        snapshot = {}
-        for k, _, _ in fields:
-            snapshot[k] = curr.get(k) if curr else None
-        return snapshot
-
-    snapshot = dict(prev)  # copy
-    for key, label, color in fields:
-        old = prev.get(key)
-        new = curr.get(key) if curr else None
-        # treat empty string as None
-        old_norm = old if old not in ("", None) else None
-        new_norm = new if new not in ("", None) else None
-
-        if old_norm != new_norm:
-            # Log specific messages
-            if key == "personaname":
-                pretty_log(f"Nickname changed: '{old_norm}' -> '{new_norm}'", color)
-            elif key == "avatarfull":
-                if old_norm is None and new_norm:
-                    pretty_log(f"Profile picture set: {new_norm}", color)
-                elif old_norm and new_norm is None:
-                    pretty_log(f"Profile picture removed (was {old_norm})", color)
-                else:
-                    pretty_log(f"Profile picture updated: '{old_norm}' -> '{new_norm}'", color)
-            else:
-                pretty_log(f"{label} changed: '{old_norm}' -> '{new_norm}'", color)
-            snapshot[key] = new_norm
-    return snapshot
-
-def monitor_loop(api_key, steamid64, interval=10):
-    prev_profile_snapshot = None  # dict of tracked fields
-    previous_state = None
-    current_game = None
-    game_start = None
-    display_name = None
-
-    while True:
-        player = fetch_player(api_key, steamid64)
-
-        # API/network error
-        if isinstance(player, tuple) and player[0] == "ERROR":
-            pretty_log(f"API error: {player[1]}", RED)
-            time.sleep(interval)
-            continue
-
-        # player may be None (profile not found / private)
-        if player is None:
-            # If previously we had a profile snapshot, and now it's gone, log once
-            if prev_profile_snapshot is not None:
-                pretty_log("Profile became unavailable or is private.", RED)
-                prev_profile_snapshot = None
-            # also treat as offline state
-            if previous_state != 0:
-                pretty_log("User is now Offline (profile unavailable).", RED)
-                previous_state = 0
-            time.sleep(interval)
-            continue
-
-        # At this point 'player' is a dict containing all fields
-        # set display_name if None
-        if display_name is None:
-            display_name = player.get("personaname", "Unknown")
-
-        # Compare tracked profile fields and log changes
-        prev_profile_snapshot = compare_and_log_profile_changes(prev_profile_snapshot, player)
-
-        # Game handling (gameextrainfo)
-        game = player.get("gameextrainfo")
-        if game and current_game != game:
-            # switching from another game: close previous
-            if current_game is not None:
-                ended = datetime.now()
-                dur = format_duration(game_start, ended) if game_start else "?"
-                pretty_log(f"Stopped playing '{current_game}' — played from {format_time(game_start)} to {format_time(ended)} ({dur})", CYAN)
-            game_start = datetime.now()
-            pretty_log(f"Started playing '{game}' at {format_time(game_start)}", GREEN)
-            current_game = game
-
-        if not game and current_game is not None:
-            ended = datetime.now()
-            dur = format_duration(game_start, ended) if game_start else "?"
-            pretty_log(f"Stopped playing '{current_game}' — played from {format_time(game_start)} to {format_time(ended)} ({dur})", CYAN)
-            current_game = None
-            game_start = None
-
-        # State handling
-        state = player.get("personastate", 0)
-        if state != previous_state:
-            text, color = STATE_META.get(state, ("Unknown", MAGENTA))
-            name_to_show = player.get("personaname") or "Unknown"
-            pretty_log(f"{name_to_show} is now {text} at {format_time(datetime.now())}", color)
-            previous_state = state
-
-        time.sleep(interval)
+def create_banner():
+    print(f"""
+{Style.CYAN}{Style.BOLD}
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃       STEAM STATUS MONITOR        ┃
+┃         Made by NezrKaan          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+{Style.RESET}
+{Style.DIM}Real-time Steam user monitoring with safe settings{Style.RESET}
+""")
 
 def main():
-    try:
-        banner()
-        api_key = input("Enter your Steam Web API Key: ").strip()
-        usr = input("Enter SteamID64 or custom profile name: ").strip()
-
-        if not usr.isdigit():
-            steamid = resolve_vanity(api_key, usr)
-            if not steamid:
-                print(f"{RED}Could not resolve custom URL '{usr}'. Exiting.{RESET}")
-                return
-        else:
-            steamid = usr
-
-        print(f"\nMonitoring: {BOLD}{steamid}{RESET}  (Checking every 10s)\n")
-
-        # ensure requests is present
-        try:
-            import requests  # sanity
-        except Exception:
-            print(f"{RED}Missing dependency: requests. Install: python3 -m pip install requests{RESET}")
-            return
-
-        # disable input echo so typed keys won't show
-        fd = sys.stdin.fileno()
-        old_settings = set_no_echo(fd)
-
-        try:
-            monitor_loop(api_key, steamid, interval=10)
-        finally:
-            restore_terminal(fd, old_settings)
-
-    except KeyboardInterrupt:
-        # Restore terminal state if needed
-        try:
-            restore_terminal(sys.stdin.fileno(), termios.tcgetattr(sys.stdin.fileno()))
-        except Exception:
-            pass
-        print(f"\n{DIM}Exiting. Goodbye!{RESET}")
+    create_banner()
+    
+    # Get API key
+    print(f"{Style.BOLD}Setup:{Style.RESET}")
+    api_key = input(f"Steam API Key: ").strip()
+    if not api_key:
+        print(f"{Style.RED}API key is required!{Style.RESET}")
+        return
+    
+    # Get user to monitor
+    user_id = input(f"Steam user (ID or custom URL): ").strip()
+    if not user_id:
+        print(f"{Style.RED}User identifier is required!{Style.RESET}")
+        return
+    
+    # Optional Discord webhook
+    discord_webhook = input(f"Discord webhook URL (optional): ").strip() or None
+    
+    # Create config with safe defaults
+    config = Config(
+        api_key=api_key,
+        user_identifier=user_id,
+        discord_webhook=discord_webhook
+    )
+    
+    print(f"\n{Style.DIM}Using safe monitoring settings (20 second intervals){Style.RESET}")
+    
+    # Setup and start monitor
+    monitor = SteamMonitor(config)
+    
+    if not monitor.setup_user():
+        return
+    
+    input(f"\n{Style.GREEN}Press Enter to start monitoring...{Style.RESET}")
+    monitor.start_monitoring()
 
 if __name__ == "__main__":
     main()
