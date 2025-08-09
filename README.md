@@ -1,41 +1,34 @@
-````markdown
 # Steam Tracker
 
 `tracker.py` is a precise Steam profile monitoring tool designed for OSINT enthusiasts, researchers, and gamers. Using the official Steam Web API, it tracks and logs real-time changes in user status, game activity, and profile details such as nickname, real name, country, avatar, and profile URL. Outputs are color-coded and timestamped, with persistent logs saved to `steam_status_log.txt`. Ideal for digital footprint analysis, user behavior tracking, and investigative research.
 
 ## Features
 
-- Tracks Steam user status changes (online, offline, busy, away, etc.)
-- Detects game start/stop events with timestamps and play duration
-- Monitors profile updates: nickname, real name, country, profile URL, avatar changes
-- Color-coded console output for easy reading
-- Logs all events to a persistent log file
-- Resolves custom Steam vanity URLs to SteamID64
-- Runs in terminal, disables input echo for cleaner UX
-- Simple setup, runs continuously until interrupted
+* Tracks Steam user status changes (online, offline, busy, away, etc.)
+* Detects game start/stop events with timestamps and play duration
+* Monitors profile updates: nickname, real name, country, profile URL, avatar changes
+* Color-coded console output for easy reading
+* Logs all events to a persistent log file
+* Resolves custom Steam vanity URLs to SteamID64
+* Runs in terminal, disables input echo for cleaner UX
+* Simple setup, runs continuously until interrupted
 
 ## Installation
 
 1. Clone the repository:
 
-   ```bash
-   git clone https://github.com/NezrKaan/steam_tracker.git
-   cd steam_tracker
-````
+   git clone [https://github.com/NezrKaan/steam\_tracker.git](https://github.com/NezrKaan/steam_tracker.git)
+   cd steam\_tracker
 
 2. Install dependencies:
 
-   ```bash
    python3 -m pip install requests
-   ```
 
 ## Usage
 
 Run the tracker script:
 
-```bash
 python3 tracker.py
-```
 
 * Enter your Steam Web API key when prompted.
 * Provide either a SteamID64 or custom profile name (vanity URL).
@@ -44,7 +37,7 @@ python3 tracker.py
 
 ## Getting a Steam Web API Key
 
-1. Visit [Steam API Key registration](https://steamcommunity.com/dev/apikey).
+1. Visit [https://steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey)
 2. Log in with your Steam account.
 3. Register your domain (or use `localhost` if testing locally).
 4. Copy your API key and use it with this tool.
@@ -63,7 +56,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 Made by NezrKaan
-GitHub: [NezrKaan/steam\_tracker](https://github.com/NezrKaan/steam_tracker)
-
-```
-```
+GitHub: [https://github.com/NezrKaan/steam\_tracker](https://github.com/NezrKaan/steam_tracker)
