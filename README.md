@@ -41,7 +41,7 @@ Steam automatically runs when a computer is started, making it possible to monit
 2. **Enter your Steam Web API key when prompted**
 
 3. **Provide target user identification:**
-   - SteamID64 (e.g., `76561198123456789`)
+   - SteamID64 (e.g., `76561198324256789`)
    - Custom profile name/vanity URL (e.g., `gaben`)
 
 4. **Optional: Enter Discord webhook URL for notifications**
