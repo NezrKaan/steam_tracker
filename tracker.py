@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Steam Status Monitor - Single user tracking
-Made by NezrKaan - Simplified Version
+Steam Status Monitor - User tracking
+Made by NezrKaan
 
 Features:
 - User monitoring with comprehensive tracking
