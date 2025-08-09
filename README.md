@@ -145,9 +145,6 @@ Contributions are welcome! Please feel free to submit pull requests or open issu
 - Dual logging system (text + JSON)
 - Comprehensive game activity tracking
 
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
 
 ## Disclaimer
 
