@@ -1,6 +1,9 @@
 # Steam Tracker
 
-`tracker.py` is a precise Steam profile monitoring tool designed for OSINT enthusiasts, researchers, and gamers. Using the official Steam Web API, it tracks and logs real-time changes in user status, game activity, and profile details such as nickname, real name, country, avatar, and profile URL. Outputs are color-coded and timestamped, with persistent logs saved to `steam_status_log.txt`. Ideal for digital footprint analysis, user behavior tracking, and investigative research.
+"tracker.py" is a precise Steam profile monitoring tool designed for OSINT enthusiasts, researchers, and gamers. Using the official Steam Web API, it tracks and logs real-time changes in user status, game activity, and profile details such as nickname, real name, country, avatar, and profile URL. Outputs are color-coded and timestamped, with persistent logs saved to steam_status_log.txt. Ideal for digital footprint analysis, user behavior tracking, OSINT, and investigative research.
+
+Why is this important?
+Steam automatically runs when a computer is started, making it possible to monitor if and when someone uses their computer by tracking their Steam online status. This tool allows you to see exactly when a user logs in and out, what games they play, and even subtle profile changes, effectively revealing their computer usage patterns and online behavior. For OSINT researchers, cybersecurity analysts, or anyone interested in digital footprint tracking, this means you can gather detailed, time-stamped insights about a user’s activity remotely and continuously without intrusive software.
 
 ## Features
 
@@ -10,7 +13,6 @@
 * Color-coded console output for easy reading
 * Logs all events to a persistent log file
 * Resolves custom Steam vanity URLs to SteamID64
-* Runs in terminal, disables input echo for cleaner UX
 * Simple setup, runs continuously until interrupted
 
 ## Installation
@@ -47,7 +49,6 @@ python3 tracker.py
 * The script requires an active internet connection.
 * The monitored profile must be public or accessible via the API.
 * Changes are detected every 10 seconds by default.
-* Input echo is disabled for cleaner output; no key presses will show in the terminal.
 
 ## License
 
