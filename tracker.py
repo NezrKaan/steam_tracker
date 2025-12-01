@@ -1,69 +1,98 @@
 #!/usr/bin/env python3
 """
-Steam Status Monitor - User tracking
-Made by NezrKaan
+Steam Status Monitor v2.0 - Multi-User Tracking
+Made by NezrKaan (Enhanced Version)
 
 Features:
-- User monitoring with comprehensive tracking
-- Automatic safe settings (20 second intervals)
-- Clean, real-time logging
-- Profile change detection
-- Game activity tracking with duration
-- Optional Discord notifications
+- Tracks MULTIPLE users simultaneously
+- Persistent configuration (saves your API key)
+- Working Discord Rich Embed notifications
+- Network resilience (auto-reconnect)
+- Game session duration calculation
 """
 
 import requests
 import time
 import sys
 import json
+import os
 from datetime import datetime, timedelta
-from dataclasses import dataclass
-from typing import Dict, Optional
-from pathlib import Path
+from dataclasses import dataclass, field, asdict
+from typing import Dict, List, Optional, Any
 
 # -------------------------
-# Configuration
+# Constants & Styling
 # -------------------------
-@dataclass
-class Config:
-    api_key: str
-    user_identifier: str
-    check_interval: int = 20  # Safe default
-    log_file: str = "steam_monitor.log"
-    json_log: str = "steam_events.json"
-    discord_webhook: Optional[str] = None
+CONFIG_FILE = "monitor_config.json"
 
-@dataclass
-class UserProfile:
-    steamid: str
-    personaname: str
-    realname: Optional[str] = None
-    country: Optional[str] = None
-    avatar: Optional[str] = None
-    profile_url: Optional[str] = None
-    persona_state: int = 0
-    game_name: Optional[str] = None
-    game_start_time: Optional[datetime] = None
-
-# -------------------------
-# Styling
-# -------------------------
 class Style:
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
-    
     RED = "\033[91m"
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
     BLUE = "\033[94m"
     MAGENTA = "\033[95m"
     CYAN = "\033[96m"
-    WHITE = "\033[97m"
-    GRAY = "\033[90m"
     
     STATUS_COLORS = {0: RED, 1: GREEN, 2: YELLOW, 3: CYAN, 4: MAGENTA, 5: BLUE, 6: BLUE}
-    STATUS_TEXT = {0: "Offline", 1: "Online", 2: "Busy", 3: "Away", 4: "Snooze", 5: "Looking to trade", 6: "Looking to play"}
+    STATUS_TEXT = {
+        0: "Offline", 1: "Online", 2: "Busy", 3: "Away", 
+        4: "Snooze", 5: "Looking to trade", 6: "Looking to play"
+    }
+
+# -------------------------
+# Data Structures
+# -------------------------
+@dataclass
+class UserProfile:
+    steamid: str
+    personaname: str = "Unknown"
+    realname: Optional[str] = None
+    avatar: Optional[str] = None
+    profile_url: Optional[str] = None
+    persona_state: int = 0
+    game_name: Optional[str] = None
+    game_start_time: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+
+@dataclass
+class Config:
+    api_key: str
+    users: List[str] = field(default_factory=list)
+    discord_webhook: Optional[str] = None
+    check_interval: int = 30
+
+# -------------------------
+# Discord Manager
+# -------------------------
+class DiscordNotifier:
+    def __init__(self, webhook_url: Optional[str]):
+        self.webhook_url = webhook_url
+
+    def send_embed(self, title: str, description: str, color: int, fields: List[Dict] = None, thumbnail: str = None):
+        if not self.webhook_url:
+            return
+
+        payload = {
+            "embeds": [{
+                "title": title,
+                "description": description,
+                "color": color,
+                "timestamp": datetime.now().isoformat(),
+                "footer": {"text": "Steam Monitor by NezrKaan"},
+                "thumbnail": {"url": thumbnail} if thumbnail else {}
+            }]
+        }
+        
+        if fields:
+            payload["embeds"][0]["fields"] = fields
+
+        try:
+            requests.post(self.webhook_url, json=payload, timeout=5)
+        except Exception as e:
+            print(f"{Style.RED}[Discord Error] Could not send notification: {e}{Style.RESET}")
 
 # -------------------------
 # Steam API Client
@@ -72,326 +101,241 @@ class SteamAPIClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.session = requests.Session()
-        self.last_request_time = 0
-        self.min_request_interval = 1.0
         
-    def _make_request(self, url: str, params: Dict) -> Optional[Dict]:
-        # Simple rate limiting
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        if time_since_last < self.min_request_interval:
-            time.sleep(self.min_request_interval - time_since_last)
+    def get_player_summaries(self, steamids: List[str]) -> List[Dict]:
+        # Steam API allows multiple IDs separated by commas
+        ids_str = ",".join(steamids)
+        url = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
+        params = {"key": self.api_key, "steamids": ids_str}
         
         try:
-            self.last_request_time = time.time()
             response = self.session.get(url, params=params, timeout=10)
-            
             if response.status_code == 429:
-                print(f"{Style.YELLOW}[WARNING] Rate limited! Waiting 60s...{Style.RESET}")
-                time.sleep(60)
-                return None
-                
+                print(f"{Style.YELLOW}[API] Rate limited. Skipping this cycle.{Style.RESET}")
+                return []
             response.raise_for_status()
-            return response.json()
-            
+            return response.json().get("response", {}).get("players", [])
         except Exception as e:
-            print(f"{Style.RED}[ERROR] API request failed: {e}{Style.RESET}")
-            return None
-    
+            print(f"{Style.RED}[API Error] {e}{Style.RESET}")
+            return []
+
     def resolve_vanity_url(self, vanity: str) -> Optional[str]:
+        # If it looks like a steamID64, return it directly
+        if vanity.isdigit() and len(vanity) == 17:
+            return vanity
+            
         url = "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/"
         params = {"key": self.api_key, "vanityurl": vanity}
-        
-        data = self._make_request(url, params)
-        if data and data.get("response", {}).get("success") == 1:
-            return data["response"]["steamid"]
-        return None
-    
-    def get_player_summary(self, steamid: str) -> Optional[Dict]:
-        url = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
-        params = {"key": self.api_key, "steamids": steamid}
-        
-        data = self._make_request(url, params)
-        if data:
-            players = data.get("response", {}).get("players", [])
-            return players[0] if players else None
+        try:
+            resp = self.session.get(url, params=params, timeout=10)
+            data = resp.json()
+            if data.get("response", {}).get("success") == 1:
+                return data["response"]["steamid"]
+        except:
+            pass
         return None
 
 # -------------------------
-# Logger
-# -------------------------
-class Logger:
-    def __init__(self, config: Config):
-        self.config = config
-        Path(self.config.log_file).touch(exist_ok=True)
-        
-    def log(self, message: str, color: str = Style.WHITE):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        
-        # Console output
-        print(f"{Style.GRAY}[{timestamp}]{Style.RESET} {color}{message}{Style.RESET}")
-        
-        # File output
-        file_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(self.config.log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{file_timestamp}] {message}\n")
-        
-        # JSON output
-        self._write_json({
-            "timestamp": datetime.now().isoformat(),
-            "message": message
-        })
-    
-    def _write_json(self, event: Dict):
-        events = []
-        if Path(self.config.json_log).exists():
-            try:
-                with open(self.config.json_log, "r", encoding="utf-8") as f:
-                    events = json.load(f)
-            except:
-                events = []
-        
-        events.append(event)
-        
-        # Keep last 500 events
-        if len(events) > 500:
-            events = events[-500:]
-        
-        with open(self.config.json_log, "w", encoding="utf-8") as f:
-            json.dump(events, f, indent=2)
-
-# -------------------------
-# Steam Monitor
+# Main Logic
 # -------------------------
 class SteamMonitor:
-    def __init__(self, config: Config):
-        self.config = config
-        self.api_client = SteamAPIClient(config.api_key)
-        self.logger = Logger(config)
-        self.profile: Optional[UserProfile] = None
+    def __init__(self):
+        self.config = self._load_config()
+        self.api = SteamAPIClient(self.config.api_key)
+        self.discord = DiscordNotifier(self.config.discord_webhook)
+        self.profiles: Dict[str, UserProfile] = {}
         self.running = False
+
+    def _load_config(self) -> Config:
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    data = json.load(f)
+                    return Config(**data)
+            except Exception as e:
+                print(f"{Style.RED}Config file corrupted: {e}{Style.RESET}")
         
-    def setup_user(self) -> bool:
-        """Setup the user to monitor"""
-        print(f"Setting up user: {self.config.user_identifier}...")
+        # Setup Wizard
+        print(f"{Style.CYAN}--- First Time Setup ---{Style.RESET}")
+        key = input("Enter Steam API Key: ").strip()
+        webhook = input("Discord Webhook (Optional, press Enter to skip): ").strip()
         
-        # Resolve user ID
-        if not self.config.user_identifier.isdigit():
-            print(f"  Resolving custom URL...")
-            steamid = self.api_client.resolve_vanity_url(self.config.user_identifier)
-            if not steamid:
-                print(f"{Style.RED}Could not resolve custom URL: {self.config.user_identifier}{Style.RESET}")
-                return False
+        cfg = Config(api_key=key, discord_webhook=webhook if webhook else None)
+        self._save_config(cfg)
+        return cfg
+
+    def _save_config(self, config: Config):
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(asdict(config), f, indent=4)
+
+    def add_user(self):
+        user_input = input(f"{Style.GREEN}Enter Steam Profile URL or Custom ID to track: {Style.RESET}").strip()
+        if not user_input: return
+        
+        # Extract ID from URL if full URL is pasted
+        if "steamcommunity.com/id/" in user_input:
+            user_input = user_input.split("/id/")[-1].strip("/")
+        elif "steamcommunity.com/profiles/" in user_input:
+            user_input = user_input.split("/profiles/")[-1].strip("/")
+
+        steamid = self.api.resolve_vanity_url(user_input)
+        if steamid:
+            if steamid not in self.config.users:
+                self.config.users.append(steamid)
+                self._save_config(self.config)
+                print(f"{Style.GREEN}User added! Restarting monitor loop...{Style.RESET}")
+            else:
+                print(f"{Style.YELLOW}User already in list.{Style.RESET}")
         else:
-            steamid = self.config.user_identifier
-        
-        # Get initial profile
-        print(f"  Fetching profile data...")
-        player_data = self.api_client.get_player_summary(steamid)
-        if not player_data:
-            print(f"{Style.RED}Could not fetch profile for: {steamid}{Style.RESET}")
-            return False
-        
-        # Create profile
-        self.profile = UserProfile(
-            steamid=steamid,
-            personaname=player_data.get('personaname', 'Unknown'),
-            realname=player_data.get('realname'),
-            country=player_data.get('loccountrycode'),
-            avatar=player_data.get('avatarfull'),
-            profile_url=player_data.get('profileurl'),
-            persona_state=player_data.get('personastate', 0),
-            game_name=player_data.get('gameextrainfo')
-        )
-        
-        if self.profile.game_name:
-            self.profile.game_start_time = datetime.now()
-        
-        # Show initial status
-        status_text = Style.STATUS_TEXT.get(self.profile.persona_state, 'Unknown')
-        status_color = Style.STATUS_COLORS.get(self.profile.persona_state, Style.WHITE)
-        game_text = f" | Playing: {self.profile.game_name}" if self.profile.game_name else ""
-        
-        print(f"{Style.GREEN}Successfully set up monitoring for:{Style.RESET}")
-        print(f"  Name: {Style.BOLD}{self.profile.personaname}{Style.RESET}")
-        print(f"  Status: {status_color}{status_text}{Style.RESET}{game_text}")
-        print(f"  SteamID: {steamid}")
-        
-        return True
-    
-    def start_monitoring(self):
-        """Start the monitoring loop"""
-        if not self.profile:
-            print(f"{Style.RED}No user profile set up!{Style.RESET}")
+            print(f"{Style.RED}Could not resolve user.{Style.RESET}")
+
+    def initialize_profiles(self):
+        print(f"{Style.DIM}Fetching initial data for {len(self.config.users)} users...{Style.RESET}")
+        data = self.api.get_player_summaries(self.config.users)
+        for p_data in data:
+            sid = p_data['steamid']
+            self.profiles[sid] = UserProfile(
+                steamid=sid,
+                personaname=p_data.get('personaname'),
+                avatar=p_data.get('avatarfull'),
+                persona_state=p_data.get('personastate', 0),
+                game_name=p_data.get('gameextrainfo')
+            )
+            if self.profiles[sid].game_name:
+                self.profiles[sid].game_start_time = datetime.now()
+                
+            print(f"Tracking: {Style.BOLD}{self.profiles[sid].personaname}{Style.RESET}")
+
+    def _format_duration(self, start_time: datetime) -> str:
+        delta = datetime.now() - start_time
+        total_seconds = int(delta.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
+
+    def check_updates(self):
+        if not self.config.users:
+            print(f"{Style.YELLOW}No users to track. Use 'Add User' option.{Style.RESET}")
             return
+
+        current_data_list = self.api.get_player_summaries(self.config.users)
         
+        for data in current_data_list:
+            sid = data['steamid']
+            if sid not in self.profiles: continue
+            
+            profile = self.profiles[sid]
+            current_time = datetime.now().strftime("%H:%M:%S")
+            
+            # 1. Check Status Change
+            new_state = data.get('personastate', 0)
+            if new_state != profile.persona_state:
+                old_text = Style.STATUS_TEXT.get(profile.persona_state, "Unknown")
+                new_text = Style.STATUS_TEXT.get(new_state, "Unknown")
+                color = Style.STATUS_COLORS.get(new_state, Style.WHITE)
+                
+                print(f"[{current_time}] {color}{profile.personaname} is now {new_text}{Style.RESET} (was {old_text})")
+                
+                # Discord Notification for Status
+                discord_color = 0x00FF00 if new_state == 1 else 0x95a5a6
+                self.discord.send_embed(
+                    title=f"Status Update: {profile.personaname}",
+                    description=f"User is now **{new_text}**",
+                    color=discord_color,
+                    thumbnail=profile.avatar
+                )
+                
+                profile.persona_state = new_state
+
+            # 2. Check Game Activity
+            new_game = data.get('gameextrainfo')
+            
+            # Game Started
+            if new_game and new_game != profile.game_name:
+                print(f"[{current_time}] {Style.GREEN}{profile.personaname} started playing {Style.BOLD}{new_game}{Style.RESET}")
+                profile.game_start_time = datetime.now()
+                profile.game_name = new_game
+                
+                self.discord.send_embed(
+                    title=f"Game Started: {profile.personaname}",
+                    description=f"Started playing **{new_game}**",
+                    color=0x2ecc71, # Green
+                    thumbnail=profile.avatar
+                )
+
+            # Game Stopped
+            elif not new_game and profile.game_name:
+                duration = "Unknown"
+                if profile.game_start_time:
+                    duration = self._format_duration(profile.game_start_time)
+                
+                print(f"[{current_time}] {Style.YELLOW}{profile.personaname} stopped playing {profile.game_name}{Style.RESET} (Time: {duration})")
+                
+                self.discord.send_embed(
+                    title=f"Game Session Ended",
+                    description=f"**{profile.personaname}** finished playing **{profile.game_name}**",
+                    color=0xe74c3c, # Red
+                    fields=[{"name": "Duration", "value": duration, "inline": True}],
+                    thumbnail=profile.avatar
+                )
+                
+                profile.game_name = None
+                profile.game_start_time = None
+
+    def start(self):
+        self.initialize_profiles()
         self.running = True
         
-        print(f"\n{Style.BOLD}{Style.GREEN}Steam Monitor Started{Style.RESET}")
-        print(f"Monitoring: {Style.CYAN}{self.profile.personaname}{Style.RESET}")
-        print(f"Check interval: {self.config.check_interval} seconds")
-        print(f"Log file: {Style.DIM}{self.config.log_file}{Style.RESET}")
-        print(f"Press {Style.BOLD}Ctrl+C{Style.RESET} to stop")
-        print(f"\n{Style.DIM}--- Live Updates ---{Style.RESET}")
-        
-        self.logger.log(f"Monitor started for {self.profile.personaname}")
+        print(f"\n{Style.CYAN}Monitor is running... Press Ctrl+C to stop.{Style.RESET}")
         
         try:
             while self.running:
-                self._check_for_changes()
+                self.check_updates()
                 time.sleep(self.config.check_interval)
         except KeyboardInterrupt:
-            self.stop_monitoring()
-    
-    def stop_monitoring(self):
-        """Stop monitoring"""
-        self.running = False
-        self.logger.log("Monitor stopped")
-        print(f"\n{Style.CYAN}Monitor stopped. Check {self.config.log_file} for full log.{Style.RESET}")
-    
-    def _check_for_changes(self):
-        """Check for any changes in the user's profile/status"""
-        current_data = self.api_client.get_player_summary(self.profile.steamid)
-        if not current_data:
-            return
-        
-        current_time = datetime.now()
-        
-        # Check status changes
-        new_status = current_data.get('personastate', 0)
-        if new_status != self.profile.persona_state:
-            old_status = Style.STATUS_TEXT.get(self.profile.persona_state, 'Unknown')
-            new_status_text = Style.STATUS_TEXT.get(new_status, 'Unknown')
-            status_color = Style.STATUS_COLORS.get(new_status, Style.WHITE)
-            
-            message = f"{self.profile.personaname} is now {new_status_text} (was {old_status})"
-            self.logger.log(message, status_color)
-            
-            self.profile.persona_state = new_status
-        
-        # Check game changes
-        new_game = current_data.get('gameextrainfo')
-        if new_game != self.profile.game_name:
-            if self.profile.game_name and not new_game:
-                # Game stopped
-                duration = "Unknown"
-                if self.profile.game_start_time:
-                    delta = current_time - self.profile.game_start_time
-                    duration = self._format_duration(delta)
-                
-                message = f"{self.profile.personaname} stopped playing '{self.profile.game_name}' (played for {duration})"
-                self.logger.log(message, Style.YELLOW)
-                
-            elif new_game:
-                # Game started
-                message = f"{self.profile.personaname} started playing '{new_game}'"
-                self.logger.log(message, Style.GREEN)
-                self.profile.game_start_time = current_time
-            
-            self.profile.game_name = new_game
-        
-        # Check profile changes
-        self._check_profile_changes(current_data, current_time)
-    
-    def _check_profile_changes(self, current_data: Dict, timestamp: datetime):
-        """Check for profile field changes"""
-        changes = [
-            ('personaname', 'nickname', self.profile.personaname),
-            ('realname', 'real name', self.profile.realname),
-            ('loccountrycode', 'country', self.profile.country),
-            ('profileurl', 'profile URL', self.profile.profile_url),
-            ('avatarfull', 'avatar', self.profile.avatar)
-        ]
-        
-        for api_field, display_name, old_value in changes:
-            new_value = current_data.get(api_field)
-            
-            # Normalize empty values
-            old_norm = old_value if old_value not in ("", None) else None
-            new_norm = new_value if new_value not in ("", None) else None
-            
-            if old_norm != new_norm:
-                message = f"{self.profile.personaname} changed {display_name}: '{old_norm}' -> '{new_norm}'"
-                self.logger.log(message, Style.MAGENTA)
-                
-                # Update stored value
-                if api_field == 'personaname':
-                    self.profile.personaname = new_norm
-                elif api_field == 'realname':
-                    self.profile.realname = new_norm
-                elif api_field == 'loccountrycode':
-                    self.profile.country = new_norm
-                elif api_field == 'profileurl':
-                    self.profile.profile_url = new_norm
-                elif api_field == 'avatarfull':
-                    self.profile.avatar = new_norm
-    
-    def _format_duration(self, delta: timedelta) -> str:
-        """Format duration in readable format"""
-        total_seconds = int(delta.total_seconds())
-        hours, remainder = divmod(total_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        
-        parts = []
-        if hours:
-            parts.append(f"{hours}h")
-        if minutes:
-            parts.append(f"{minutes}m")
-        if seconds and not parts:
-            parts.append(f"{seconds}s")
-        
-        return " ".join(parts) if parts else "0s"
+            print(f"\n{Style.RED}Stopping monitor...{Style.RESET}")
 
 # -------------------------
-# Main Application
+# Entry Point
 # -------------------------
-def create_banner():
-    print(f"""
-{Style.CYAN}{Style.BOLD}
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃       STEAM STATUS MONITOR        ┃
-┃         Made by NezrKaan          ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-{Style.RESET}
-{Style.DIM}Real-time Steam user monitoring with safe settings{Style.RESET}
-""")
-
 def main():
-    create_banner()
+    print(f"""{Style.BOLD}{Style.BLUE}
+    ╔══════════════════════════════════╗
+    ║       STEAM MONITOR v2.0         ║
+    ╚══════════════════════════════════╝
+    {Style.RESET}""")
     
-    # Get API key
-    print(f"{Style.BOLD}Setup:{Style.RESET}")
-    api_key = input(f"Steam API Key: ").strip()
-    if not api_key:
-        print(f"{Style.RED}API key is required!{Style.RESET}")
-        return
+    monitor = SteamMonitor()
     
-    # Get user to monitor
-    user_id = input(f"Steam user (ID or custom URL): ").strip()
-    if not user_id:
-        print(f"{Style.RED}User identifier is required!{Style.RESET}")
-        return
-    
-    # Optional Discord webhook
-    discord_webhook = input(f"Discord webhook URL (optional): ").strip() or None
-    
-    # Create config with safe defaults
-    config = Config(
-        api_key=api_key,
-        user_identifier=user_id,
-        discord_webhook=discord_webhook
-    )
-    
-    print(f"\n{Style.DIM}Using safe monitoring settings (20 second intervals){Style.RESET}")
-    
-    # Setup and start monitor
-    monitor = SteamMonitor(config)
-    
-    if not monitor.setup_user():
-        return
-    
-    input(f"\n{Style.GREEN}Press Enter to start monitoring...{Style.RESET}")
-    monitor.start_monitoring()
+    while True:
+        if not monitor.config.users:
+            print("\nUser list is empty!")
+            monitor.add_user()
+        else:
+            print(f"\nTracking {len(monitor.config.users)} users.")
+            print("1. Start Monitoring")
+            print("2. Add Another User")
+            print("3. Reset Config")
+            print("4. Exit")
+            
+            choice = input("Select: ").strip()
+            
+            if choice == "1":
+                monitor.start()
+                break
+            elif choice == "2":
+                monitor.add_user()
+            elif choice == "3":
+                if os.path.exists(CONFIG_FILE):
+                    os.remove(CONFIG_FILE)
+                    print("Config deleted. Please restart.")
+                    return
+            elif choice == "4":
+                sys.exit()
+            else:
+                print("Invalid choice")
 
 if __name__ == "__main__":
     main()
