@@ -1,158 +1,138 @@
-# Steam Tracker
+Steam Tracker
+Steam Tracker is an advanced OSINT (Open Source Intelligence) monitoring tool designed for digital footprint analysis, behavioral research, and real-time user tracking. Leveraging the official Steam Web API, it provides granular visibility into user activity, session duration, and profile modifications.
 
-`tracker.py` is a precise Steam profile monitoring tool designed for OSINT enthusiasts, researchers, and gamers. Using the official Steam Web API, it tracks and logs real-time changes in user status, game activity, and profile details such as nickname, real name, country, avatar, and profile URL. Outputs are color-coded and timestamped, with persistent logs saved to `steam_status_log.txt`. Ideal for digital footprint analysis, user behavior tracking, OSINT, and investigative research.
+This tool is engineered for security researchers, data analysts, and OSINT professionals requiring precise, timestamped logs of target activity without deploying intrusive client-side software.
 
-## Why is this important?
+Intelligence Value
+Steam clients often launch automatically upon system startup, making Steam activity a high-fidelity indicator of a target's physical presence and computer usage. Steam Tracker capitalizes on this by monitoring:
 
-Steam automatically runs when a computer is started, making it possible to monitor if and when someone uses their computer by tracking their Steam online status. This tool allows you to see exactly when a user logs in and out, what games they play, and even subtle profile changes, effectively revealing their computer usage patterns and online behavior. For OSINT researchers, cybersecurity analysts, or anyone interested in digital footprint tracking, this means you can gather detailed, time-stamped insights about a user's activity remotely and continuously without intrusive software.
+System Activity Patterns: Correlate online/offline transitions with physical activity.
 
-## Features
+Behavioral Analysis: Track gaming habits, session lengths, and time-of-day usage patterns.
 
-- **Real-time Status Tracking** - Monitors Steam user status changes (online, offline, busy, away, etc.)
-- **Game Activity Detection** - Detects game start/stop events with timestamps and play duration calculation
-- **Profile Change Monitoring** - Tracks profile updates including nickname, real name, country, profile URL, and avatar changes
-- **Color-coded Output** - Easy-to-read console output with color coding for different event types
-- **Persistent Logging** - All events logged to `steam_status_log.txt` with timestamps
-- **JSON Event Log** - Machine-readable event history in `steam_events.json`
-- **Vanity URL Support** - Resolves custom Steam vanity URLs to SteamID64 automatically
-- **Safe Rate Limiting** - Built-in API rate limiting with 20-second intervals for optimal performance
-- **Comprehensive Error Handling** - Robust error handling for network issues and API limitations
+Profile Integrity: Detect subtle changes in identity (avatar, aliases, location data) often used to obfuscate user identity.
 
-## Installation
+This data enables the construction of detailed behavioral profiles and activity timelines remotely and passively.
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/NezrKaan/steam_tracker.git
-   cd steam_tracker
-   ```
+Key Features
+Multi-Target Monitoring: Support for tracking multiple subjects simultaneously (Enterprise Edition).
 
-2. **Install dependencies:**
-   ```bash
-   python3 -m pip install requests
-   ```
+Real-time State Detection: Instant logging of status transitions (Online, Offline, Away, Busy, Snooze).
 
-## Usage
+Session Telemetry: Precise calculation of game session durations and application switching.
 
-1. **Run the tracker script:**
-   ```bash
-   python3 tracker.py
-   ```
+Profile Reconnaissance: Automatic detection of changes to:
 
-2. **Enter your Steam Web API key when prompted**
+Display Name (Aliases)
 
-3. **Provide target user identification:**
-   - SteamID64 (e.g., `76561198324256789`)
-   - Custom profile name/vanity URL (e.g., `gaben`)
+Real Name
 
-4. **Optional: Enter Discord webhook URL for notifications**
+Geo-location (Country Code)
 
-5. **The program will start monitoring, displaying live updates and logging to files**
+Avatar/Profile Images
 
-6. **Exit anytime with `Ctrl+C`**
+Custom URL (Vanity ID)
 
-## Getting a Steam Web API Key
+Discord Integration: Real-time rich embed notifications sent to a configured Discord Webhook.
 
-1. Visit [https://steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey)
-2. Log in with your Steam account
-3. Register your domain (you can use `localhost` for personal use)
-4. Copy your API key and use it with this tool
+Resilient Architecture: Built-in network error handling, auto-reconnection logic, and thread-safe execution.
 
-## Output Examples
+Dual-Format Logging:
 
-### Console Output
-```
-[14:23:15] john_doe is now Online (was Offline)
-[14:25:32] john_doe started playing 'Counter-Strike 2'
-[16:42:18] john_doe stopped playing 'Counter-Strike 2' (played for 2h 16m)
-[16:42:25] john_doe changed nickname: 'john_doe' -> 'JohnTheGamer'
-[16:45:03] john_doe is now Away (was Online)
-```
+monitor.log: Human-readable chronological events.
 
-### Log Files
-- **steam_status_log.txt** - Human-readable log with timestamps
-- **steam_events.json** - Machine-readable JSON format for data analysis
+steam_events.json: Structured data for programmatic analysis.
 
-## Technical Details
+Installation
+Prerequisites
+Python 3.8 or higher
 
-### Monitoring Capabilities
-- **Status Changes**: Online/Offline transitions, Away/Busy states
-- **Game Activity**: Start/stop times, duration calculations, game switching
-- **Profile Modifications**: Name changes, country updates, avatar changes, profile URL modifications
-- **Timing Analysis**: Precise timestamps for all events, activity pattern recognition
+Valid Steam Web API Key
 
-### API Specifications
-- **Request Interval**: 20 seconds (optimized for single-user tracking)
-- **Rate Limiting**: Built-in protection against API rate limits
-- **Timeout Handling**: 10-second request timeouts with retry logic
-- **Error Recovery**: Automatic recovery from temporary network issues
+Internet connectivity
 
-## Important Notes & Warnings
+Setup
+Clone the Repository
 
-### Legal & Ethical Considerations
-⚠️ **IMPORTANT**: This tool is intended for legitimate research, security analysis, and personal use only. Users must comply with:
-- Steam's Terms of Service and API Terms of Use
-- Local privacy laws and regulations
-- Ethical guidelines for data collection and monitoring
-- Obtaining appropriate permissions when monitoring others
+Bash
 
-### Technical Limitations
-- **Public Profiles Only**: Can only monitor users with public Steam profiles
-- **API Dependency**: Requires active internet connection and Steam API availability
-- **Rate Limits**: Steam API has rate limits; tool includes safe defaults
-- **Privacy Settings**: Some profile information may be hidden based on user privacy settings
+git clone https://github.com/NezrKaan/steam_tracker.git
+cd steam_tracker
+Install Dependencies
 
-### Privacy & Security
-- **Data Storage**: All logs are stored locally on your machine
-- **No Data Transmission**: Tool does not send data to external servers (except Steam API)
-- **Sensitive Information**: API keys and logs may contain sensitive information - handle appropriately
-- **Responsible Use**: Always respect user privacy and applicable laws
+Bash
 
-### System Requirements
-- **Python**: 3.6 or higher
-- **Dependencies**: requests library
-- **Storage**: Minimal disk space for log files
-- **Network**: Stable internet connection for API requests
+pip3 install -r requirements.txt
+# Or manually:
+pip3 install requests
+Configuration
+The tool utilizes a monitor_config.json file for persistent configuration. This is generated automatically upon the first run, or can be created manually:
 
-## Troubleshooting
+JSON
 
-### Common Issues
-1. **"Could not resolve custom URL"**: Verify the vanity URL is correct and public
-2. **"API request failed"**: Check your API key and internet connection
-3. **"Rate limited"**: Tool will automatically wait and retry
-4. **Empty profile data**: Target profile may be private or have restricted visibility
+{
+  "api_key": "YOUR_STEAM_API_KEY",
+  "webhook_url": "YOUR_DISCORD_WEBHOOK_URL",
+  "target_users": [
+    "76561198000000000",
+    "76561198000000001"
+  ],
+  "interval": 30
+}
+api_key: Obtain from Steam Developer Portal.
 
-### Debug Tips
-- Verify API key is valid at Steam's developer portal
-- Ensure target profile is set to public
-- Check firewall settings if connection issues persist
-- Monitor console output for specific error messages
+webhook_url: (Optional) For Discord notifications.
 
-## Contributing
+target_users: List of SteamID64s to monitor.
 
-Contributions are welcome! Please feel free to submit pull requests or open issues for:
-- Bug fixes and improvements
-- Feature suggestions
-- Documentation updates
-- Code optimization
+interval: Polling frequency in seconds (Default: 30).
 
-## Changelog
+Usage
+Execute the tracker using Python:
 
-### Current Version Features
-- 20-second monitoring intervals (optimized from 30s)
-- Enhanced profile change detection
-- Improved error handling and recovery
-- Color-coded console output
-- Dual logging system (text + JSON)
-- Comprehensive game activity tracking
+Bash
 
+python3 tracker.py
+Operational Workflow
+Initialization: Validates API credentials and resolves target vanity URLs.
 
-## Disclaimer
+Baseline Acquisition: Fetches initial state for all targets.
 
-This tool is provided for educational and research purposes. Users are responsible for ensuring their use complies with applicable laws, terms of service, and ethical guidelines. The authors assume no responsibility for misuse or any consequences arising from the use of this software.
+Polling Loop: Queries the Steam API at defined intervals.
 
----
+Delta Analysis: Compares current state against cached state to identify changes.
 
-**Made by NezrKaan**  
-GitHub: [https://github.com/NezrKaan/steam_tracker](https://github.com/NezrKaan/steam_tracker)
+Reporting: Logs events to console/disk and dispatches webhook alerts.
 
-*For OSINT researchers, cybersecurity analysts, and digital footprint investigation*
+Output Samples
+Console Stream
+Plaintext
+
+[14:23:15] [INFO] Target_A is now Online (was Offline)
+[14:25:32] [INFO] Target_A started playing 'Counter-Strike 2'
+[16:42:18] [INFO] Target_A stopped playing 'Counter-Strike 2' (Duration: 2h 16m)
+[16:42:25] [WARN] Target_A changed nickname: 'Target_A' -> 'GhostUser'
+Discord Alerts
+Rich embeds provide visual indicators:
+
+Green: Online / Game Started
+
+Red: Offline / Game Stopped
+
+Yellow: Status Change (Away/Busy)
+
+Blue: Profile Metadata Change
+
+Legal & Ethical Disclaimer
+Steam Tracker is strictly intended for educational purposes, authorized security research, and personal use.
+
+Compliance: Users are responsible for complying with Steam's Terms of Service, the Steam Web API Terms of Use, and all applicable local, state, and federal privacy laws.
+
+Privacy: This tool accesses only publicly available profile data. It cannot bypass privacy settings or access private profiles.
+
+Liability: The developer (NezrKaan) assumes no liability for misuse of this software or for any consequences resulting from its use.
+
+Author
+NezrKaan Full Stack Developer & Security Researcher
+
+Website: nezrkaan.com GitHub: github.com/NezrKaan
